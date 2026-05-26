@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pong 1P - Habibil</title>
+
+<style>
+body{
+  margin:0;
+  background:#0b0c10;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  height:100vh;
+  flex-direction:column;
+  font-family:Courier New, monospace;
+}
+
+canvas{
+  border:1px solid rgba(255,255,255,0.08);
+}
+
+#info{
+  color:rgba(255,255,255,0.3);
+  margin-top:10px;
+  font-size:12px;
+}
+</style>
+</head>
+
+<body>
+
+<canvas id="game" width="480" height="520"></canvas>
+
+<div id="info">
+W/S atau ↑↓ untuk gerak · ENTER mulai · P pause · R restart
+</div>
+
+<script>
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+const W = canvas.width;
+const H = canvas.height;
+
+const PW = 12;
+const PH = 80;
+
+let keys = {};
+
+let gameState = "splash";
+let WIN_SCORE = 5;
+
+let player = {
+  x:10,
+  y:H/2-PH/2,
+  w:PW,
+  h:PH,
+  speed:320
+};
+
+let ai = {
+  x:W-22,
+  y:H/2-PH/2,
+  w:PW,
+  h:PH
+};
+
+let ball = {
+  x:W/2,
+  y:H/2,
+  vx:200,
+  vy:150,
+  r:9,
+  trail:[]
+};
+
+let scorePlayer = 0;
+let scoreAI = 0;
+
+let highScore = parseInt(localStorage.getItem("pongHS") || "0");
+
+let shake = {
+  timer:0,
+  intens:8,
+  x:0,
+  y:0
+};
+
+let particles = [];
+let floats = [];
+
+function emitP(x,y,color,count){
+
+  for(let i=0;i<count;i++){
+
+    let angle = Math.random()*Math.PI*2;
+    let speed = 60 + Math.random()*120;
+
+    particles.push({
+      x:x,
+      y:y,
+      vx:Math.cos(angle)*speed,
+      vy:Math.sin(angle)*speed,
+      r:2 + Math.random()*3,
+      life:1,
+      color:color
+    });
+  }
+}
+
+function spawnFloat(x,y,text,color){
+
+  floats.push({
+    x:x,
+    y:y,
+    text:text,
+    color:color,
+    life:1
+  });
+}
+
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+const audioCtx = AudioCtx ? new AudioCtx() : null;
+
+function beep(freq,dur,type){
+
+  if(!audioCtx) return;
+
+  let o = audioCtx.createOscillator();
+  let g = audioCtx.createGain();
+
+  o.connect(g);
+  g.connect(audioCtx.destination);
+
+  o.type = type || "square";
+  o.frequency.value = freq;
+
+  g.gain.setValueAtTime(0.15,audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001,audioCtx.currentTime + dur);
+
+  o.start();
+  o.stop(audioCtx.currentTime + dur);
+}
+
+function sfxHit(){
+  beep(440,0.08,"square");
+}
+
+function sfxWall(){
+  beep(220,0.06,"sine");
+}
+
+function sfxGol(){
+  beep(110,0.3,"sawtooth");
+}
+
+function sfxWin(){
+
+  beep(880,0.2,"sine");
+
+  setTimeout(()=>{
+    beep(1100,0.3,"sine");
+  },200);
+}
+
+function resetBall(dir){
+
+  ball.x = W/2;
+  ball.y = H/2;
+
+  ball.vx = (dir || 1) * 200;
+  ball.vy = (Math.random()>0.5 ? 1 : -1) * 150;
+
+  ball.trail = [];
+}
+
+function resetGame(){
+
+  scorePlayer = 0;
+  scoreAI = 0;
+
+  player.y = H/2-PH/2;
+  ai.y = H/2-PH/2;
+
+  particles = [];
+  floats = [];
+
+  shake.timer = 0;
+
+  resetBall(1);
+
+  gameState = "playing";
+}
+
+function update(dt){
+
+  if(gameState !== "playing") return;
+
+  // player movement
+  if(keys["ArrowUp"] || keys["w"] || keys["W"]){
+    player.y -= player.speed * dt;
+  }
+
+  if(keys["ArrowDown"] || keys["s"] || keys["S"]){
+    player.y += player.speed * dt;
+  }
+
+  player.y = Math.max(0,Math.min(H-PH,player.y));
+
+  // AI adaptif
+  let aiSpeed = 150 + scorePlayer * 18;
+
+  let aiTarget = ball.y - PH/2;
+  let aiDiff = aiTarget - ai.y;
+
+  ai.y += Math.sign(aiDiff) *
+          Math.min(Math.abs(aiDiff), aiSpeed * dt);
+
+  ai.y = Math.max(0,Math.min(H-PH,ai.y));
+
+  // trail bola
+  ball.trail.push({
+    x:ball.x,
+    y:ball.y
+  });
+
+  if(ball.trail.length > 10){
+    ball.trail.shift();
+  }
+
+  // gerak bola
+  ball.x += ball.vx * dt;
+  ball.y += ball.vy * dt;
+
+  // collision dinding
+  if(ball.y - ball.r < 0){
+
+    ball.y = ball.r;
+    ball.vy = Math.abs(ball.vy);
+
+    sfxWall();
+  }
+
+  if(ball.y + ball.r > H){
+
+    ball.y = H-ball.r;
+    ball.vy = -Math.abs(ball.vy);
+
+    sfxWall();
+  }
+
+  // collision player
+  if(
+    ball.vx < 0 &&
+    ball.x-ball.r < player.x+PW &&
+    ball.y > player.y &&
+    ball.y < player.y+PH
+  ){
+
+    ball.vx = Math.abs(ball.vx) * 1.06;
+
+    let rel =
+      (ball.y-(player.y+PH/2)) / (PH/2);
+
+    ball.vy = rel * 230;
+
+    emitP(
+      player.x + PW,
+      ball.y,
+      "#4facfe",
+      6
+    );
+
+    sfxHit();
+  }
+
+  // collision ai
+  if(
+    ball.vx > 0 &&
+    ball.x+ball.r > ai.x &&
+    ball.y > ai.y &&
+    ball.y < ai.y+PH
+  ){
+
+    ball.vx = -Math.abs(ball.vx) * 1.04;
+
+    let rel =
+      (ball.y-(ai.y+PH/2)) / (PH/2);
+
+    ball.vy = rel * 210;
+
+    emitP(
+      ai.x,
+      ball.y,
+      "#ff6b6b",
+      6
+    );
+
+    sfxHit();
+  }
+
+  // AI point
+  if(ball.x-ball.r < 0){
+
+    scoreAI++;
+
+    sfxGol();
+
+    shake.timer = 0.22;
+
+    spawnFloat(
+      W/2,
+      H/2-30,
+      "AI Point!",
+      "#ff6b6b"
+    );
+
+    if(scoreAI >= WIN_SCORE){
+
+      gameState = "gameover";
+
+    }else{
+
+      resetBall(1);
+    }
+  }
+
+  // Player point
+  if(ball.x+ball.r > W){
+
+    scorePlayer++;
+
+    spawnFloat(
+      W/2,
+      H/2-30,
+      "Your Point!",
+      "#43e97b"
+    );
+
+    if(scorePlayer > highScore){
+
+      highScore = scorePlayer;
+
+      localStorage.setItem(
+        "pongHS",
+        highScore
+      );
+    }
+
+    if(scorePlayer >= WIN_SCORE){
+
+      gameState = "win";
+
+      sfxWin();
+
+    }else{
+
+      resetBall(-1);
+    }
+  }
+
+  // update particles
+  for(let i=particles.length-1;i>=0;i--){
+
+    let p = particles[i];
+
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+
+    p.life -= dt * 2.5;
+
+    if(p.life <= 0){
+      particles.splice(i,1);
+    }
+  }
+
+  // update float text
+  for(let i=floats.length-1;i>=0;i--){
+
+    floats[i].y -= 40 * dt;
+    floats[i].life -= dt * 1.2;
+
+    if(floats[i].life <= 0){
+      floats.splice(i,1);
+    }
+  }
+
+  // screen shake
+  if(shake.timer > 0){
+
+    shake.timer -= dt;
+
+    shake.x =
+      (Math.random()-0.5) * shake.intens;
+
+    shake.y =
+      (Math.random()-0.5) * shake.intens;
+
+  }else{
+
+    shake.x = 0;
+    shake.y = 0;
+  }
+}
+
+function render(){
+
+  ctx.fillStyle = "#0b0c10";
+  ctx.fillRect(0,0,W,H);
+
+  // grid background
+  ctx.strokeStyle = "rgba(255,255,255,0.03)";
+
+  for(let i=0;i<W;i+=40){
+
+    ctx.beginPath();
+    ctx.moveTo(i,0);
+    ctx.lineTo(i,H);
+    ctx.stroke();
+  }
+
+  for(let i=0;i<H;i+=40){
+
+    ctx.beginPath();
+    ctx.moveTo(0,i);
+    ctx.lineTo(W,i);
+    ctx.stroke();
+  }
+
+  // garis tengah
+  ctx.setLineDash([8,8]);
+
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+
+  ctx.beginPath();
+  ctx.moveTo(W/2,0);
+  ctx.lineTo(W/2,H);
+  ctx.stroke();
+
+  ctx.setLineDash([]);
+
+  ctx.save();
+
+  ctx.translate(shake.x,shake.y);
+
+  // score
+  ctx.fillStyle = "rgba(255,255,255,0.08)";
+  ctx.font = "bold 64px Courier New";
+  ctx.textAlign = "center";
+
+  ctx.fillText(
+    scorePlayer + "  " + scoreAI,
+    W/2,
+    75
+  );
+
+  // high score
+  ctx.fillStyle = "rgba(255,255,255,0.2)";
+  ctx.font = "11px Courier New";
+
+  ctx.fillText(
+    "BEST: " + highScore,
+    W/2,
+    95
+  );
+
+  // speedometer
+  let speed = Math.sqrt(
+    ball.vx * ball.vx +
+    ball.vy * ball.vy
+  );
+
+  ctx.fillStyle = "rgba(255,255,255,0.45)";
+  ctx.font = "12px Courier New";
+  ctx.textAlign = "right";
+
+  ctx.fillText(
+    "SPEED: " + Math.round(speed),
+    W - 15,
+    H - 15
+  );
+
+  // trail
+  for(let i=0;i<ball.trail.length;i++){
+
+    ctx.globalAlpha =
+      (i / ball.trail.length) * 0.35;
+
+    ctx.fillStyle = "#fff";
+
+    ctx.beginPath();
+
+    ctx.arc(
+      ball.trail[i].x,
+      ball.trail[i].y,
+      ball.r * (i / ball.trail.length) * 0.9,
+      0,
+      Math.PI*2
+    );
+
+    ctx.fill();
+  }
+
+  ctx.globalAlpha = 1;
+
+  // bola glow
+  ctx.shadowBlur = 14;
+  ctx.shadowColor = "#ffffff";
+
+  ctx.fillStyle = "#fff";
+
+  ctx.beginPath();
+
+  ctx.arc(
+    ball.x,
+    ball.y,
+    ball.r,
+    0,
+    Math.PI*2
+  );
+
+  ctx.fill();
+
+  ctx.shadowBlur = 0;
+
+  // player paddle
+  ctx.shadowBlur = 10;
+  ctx.shadowColor = "#4facfe";
+
+  ctx.fillStyle = "#4facfe";
+
+  ctx.fillRect(
+    player.x,
+    player.y,
+    player.w,
+    player.h
+  );
+
+  ctx.shadowBlur = 0;
+
+  // ai paddle
+  ctx.shadowBlur = 10;
+  ctx.shadowColor = "#ff6b6b";
+
+  ctx.fillStyle = "#ff6b6b";
+
+  ctx.fillRect(
+    ai.x,
+    ai.y,
+    ai.w,
+    ai.h
+  );
+
+  ctx.shadowBlur = 0;
+
+  // particles
+  for(let p of particles){
+
+    ctx.globalAlpha = p.life;
+
+    ctx.fillStyle = p.color;
+
+    ctx.beginPath();
+
+    ctx.arc(
+      p.x,
+      p.y,
+      p.r * p.life,
+      0,
+      Math.PI*2
+    );
+
+    ctx.fill();
+  }
+
+  ctx.globalAlpha = 1;
+
+  // floating text
+  for(let f of floats){
+
+    ctx.globalAlpha = f.life;
+
+    ctx.fillStyle = f.color;
+
+    ctx.font = "bold 20px Courier New";
+    ctx.textAlign = "center";
+
+    ctx.fillText(
+      f.text,
+      f.x,
+      f.y
+    );
+  }
+
+  ctx.globalAlpha = 1;
+
+  ctx.restore();
+
+  // splash
+  if(gameState === "splash"){
+
+    ctx.fillStyle = "rgba(0,0,0,0.8)";
+    ctx.fillRect(0,0,W,H);
+
+    ctx.fillStyle = "#4facfe";
+
+    ctx.font = "bold 52px Courier New";
+    ctx.textAlign = "center";
+
+    ctx.fillText(
+      "PONG 1P",
+      W/2,
+      H/2-50
+    );
+
+    ctx.fillStyle = "rgba(255,255,255,0.5)";
+    ctx.font = "14px Courier New";
+
+    ctx.fillText(
+      "Tekan ENTER untuk mulai",
+      W/2,
+      H/2+30
+    );
+  }
+
+  // win
+  if(gameState === "win"){
+
+    ctx.fillStyle = "rgba(0,0,0,0.8)";
+    ctx.fillRect(0,0,W,H);
+
+    ctx.fillStyle = "#43e97b";
+
+    ctx.font = "bold 52px Courier New";
+    ctx.textAlign = "center";
+
+    ctx.fillText(
+      "YOU WIN!",
+      W/2,
+      H/2
+    );
+
+    ctx.font = "14px Courier New";
+
+    ctx.fillText(
+      "Tekan R untuk main lagi",
+      W/2,
+      H/2+60
+    );
+  }
+
+  // gameover
+  if(gameState === "gameover"){
+
+    ctx.fillStyle = "rgba(0,0,0,0.8)";
+    ctx.fillRect(0,0,W,H);
+
+    ctx.fillStyle = "#ff6b6b";
+
+    ctx.font = "bold 46px Courier New";
+    ctx.textAlign = "center";
+
+    ctx.fillText(
+      "GAME OVER",
+      W/2,
+      H/2
+    );
+
+    ctx.font = "14px Courier New";
+
+    ctx.fillText(
+      "Tekan R untuk main lagi",
+      W/2,
+      H/2+60
+    );
+  }
+
+  // pause
+  if(gameState === "paused"){
+
+    ctx.fillStyle = "rgba(0,0,0,0.7)";
+    ctx.fillRect(0,0,W,H);
+
+    ctx.fillStyle = "#fff";
+
+    ctx.font = "bold 36px Courier New";
+    ctx.textAlign = "center";
+
+    ctx.fillText(
+      "PAUSED",
+      W/2,
+      H/2
+    );
+  }
+}
+
+let lastTime = 0;
+
+function loop(ts){
+
+  let dt = Math.min(
+    (ts-lastTime)/1000,
+    0.05
+  );
+
+  lastTime = ts;
+
+  update(dt);
+
+  render();
+
+  requestAnimationFrame(loop);
+}
+
+document.addEventListener("keydown",e=>{
+
+  keys[e.key] = true;
+
+  if(e.key === "Enter"){
+
+    if(audioCtx &&
+       audioCtx.state === "suspended"){
+
+      audioCtx.resume();
+    }
+
+    if(gameState === "splash"){
+      resetGame();
+    }
+  }
+
+  if(e.key === "r" || e.key === "R"){
+
+    if(
+      gameState === "win" ||
+      gameState === "gameover"
+    ){
+      resetGame();
+    }
+  }
+
+  if(e.key === "p" || e.key === "P"){
+
+    if(gameState === "playing"){
+
+      gameState = "paused";
+
+    }else if(gameState === "paused"){
+
+      gameState = "playing";
+    }
+  }
+});
+
+document.addEventListener("keyup",e=>{
+
+  keys[e.key] = false;
+});
+
+requestAnimationFrame(ts=>{
+
+  lastTime = ts;
+
+  requestAnimationFrame(loop);
+});
+
+</script>
+
+</body>
+</html>
