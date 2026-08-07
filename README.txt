@@ -1,6 +1,6 @@
 ==============================================
 NAMA GIM  : Pong 1P
-DIBUAT    : [Nama Kamu] — XI RPL — SMK [Nama Sekolah]
+DIBUAT    : Habibil — XI RPL — SMK Brantas
 TAHUN     : 2025
 ==============================================
 CARA MAIN : Buka file index.html di browser Chrome/Firefox
